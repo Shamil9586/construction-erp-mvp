@@ -17,9 +17,6 @@
     "strictBindCallApply": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
-    "esModuleInterop": true,
-    "paths": {
-      "@construction-erp/domain": ["../../packages/domain/src"]
-    }
+    "esModuleInterop": true
   }
 }
