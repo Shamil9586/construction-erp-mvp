@@ -146,7 +146,7 @@ export class RealFileStorageProvider implements FileStorageProvider {
    * это отдельный непроверенный этап, отделённый от demo-хранилища
    * (MockFileStorageProvider), которое реально работает уже сейчас.
    */
-  async download(): Promise<DownloadedFile | null> {
+  async download(_tenantId: string, _externalFileId: string): Promise<DownloadedFile | null> {
     throw new Error(
       "RealFileStorageProvider.download() не реализован — REQUIRES BITRIX24 TEST PORTAL VERIFICATION (disk.file.get/DOWNLOAD_URL, см. docs/bitrix24-integration.md §7)",
     );
