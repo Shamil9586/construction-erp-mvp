@@ -1,0 +1,24 @@
+{
+  "name": "construction-erp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Производственная система управления строительством, встроенная в Bitrix24 (monorepo).",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm run start:dev --workspace apps/backend",
+    "dev:frontend": "npm run dev --workspace apps/frontend",
+    "build": "npm run build --workspace packages/domain && npm run build --workspace apps/backend && npm run build --workspace apps/frontend",
+    "test:domain": "npm run test --workspace packages/domain",
+    "test:backend": "npm run test --workspace apps/backend",
+    "test:e2e": "npm run test:e2e --workspace apps/backend",
+    "prisma:migrate": "npm run prisma:migrate --workspace apps/backend",
+    "prisma:seed": "npm run prisma:seed --workspace apps/backend",
+    "verify:local": "tsx verify/run.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,37 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage/
+.pgdata/
+
+# Демо/локальное файловое хранилище (MockFileStorageProvider,
+# LOCAL_FILE_STORAGE_PATH) — реальные загруженные байты (фото инспекций и
+# т.п.), не версионируются ни при локальном запуске, ни в Docker-сборке.
+storage/
+apps/backend/storage/
+
+# Дампы/экспорты БД с потенциально реальными данными — никогда не в git.
+*.dump
+*.dump.gz
+*.sql.gz
+db-dump*
+*-dump.sql
+backup*.sql
+
+# Временные/runtime файлы.
+tmp/
+temp/
+*.tmp
+*.pid
+
+# Секреты вне .env (на случай локального экспорта ключей/сертификатов).
+# *.key матчит только файлы, буквально оканчивающиеся на ".key" — не .ts/.tsx.
+*.pem
+*.key
+*.p12
+*credentials*.json

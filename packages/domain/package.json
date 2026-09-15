@@ -1,0 +1,24 @@
+{
+  "name": "@construction-erp/domain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Framework-agnostic domain layer: business rules, независимые от Bitrix API / React / ORM / файловой системы (см. docs/architecture.md).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0"
+  }
+}

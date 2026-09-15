@@ -1,0 +1,799 @@
+// Prisma schema — производственное ядро строительной компании.
+// Источник истины для доменной модели (ТЗ п.13-31). PostgreSQL, UUID PK,
+// Decimal для денег, timestamps, optimistic concurrency (version), индексы
+// по tenantId/objectId/contractorId/responsibleUserId/status/дате.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================= TENANCY / BITRIX =============================
+
+model Tenant {
+  id        String   @id @default(uuid())
+  portal    String   @unique // домен Bitrix24-портала, напр. company.bitrix24.ru
+  memberId  String   @unique // Bitrix24 member_id
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  installations BitrixInstallation[]
+  users               User[]
+  objects             ConstructionObject[]
+  contractors         Contractor[]
+  workCategories      WorkCategory[]
+  workTypes           WorkType[]
+  materials           Material[]
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  dictionaryItems     DictionaryItem[]
+  riskSettings        RiskSettings?
+
+  @@index([portal])
+}
+
+model BitrixInstallation {
+  id                    String    @id @default(uuid())
+  tenantId              String
+  tenant                Tenant    @relation(fields: [tenantId], references: [id])
+  portal                String
+  memberId              String
+  encryptedAccessToken  String
+  encryptedRefreshToken String
+  // ХАРДЕНИНГ-ФИКС (integrity pass, п.5): референсный application_token,
+  // полученный на ONAPPINSTALL, сохраняется зашифрованным (та же схема, что
+  // и OAuth-токены выше) как эталон для последующей timing-safe сверки
+  // member_id + application_token во всех будущих event-хендлерах Bitrix24
+  // (см. BitrixTokenService.verifyApplicationToken()). Nullable — записи,
+  // созданные до этого поля, не имеют сохранённого значения; сам факт
+  // присутствия application_token в первом ONAPPINSTALL НЕ считается
+  // криптографическим подтверждением подлинности этого самого первого
+  // вызова (см. install.controller.ts, docs/bitrix24-integration.md §2) —
+  // это подтверждает только последующие вызовы, для которых уже есть с чем
+  // сверять.
+  encryptedApplicationToken String?
+  scope                 String?
+  expiresAt             DateTime
+  installedByBitrixId   Int?
+  status                InstallationStatus @default(ACTIVE)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([tenantId])
+  @@unique([tenantId, memberId])
+}
+
+enum InstallationStatus {
+  ACTIVE
+  UNINSTALLED
+  TOKEN_INVALID
+}
+
+// ================================= USERS =====================================
+
+model User {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  bitrixUserId   Int // основной внешний ID (НЕ email)
+  name           String
+  email          String?
+  departmentId   String?
+  departmentName String?
+  position       String?
+  role           Role
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  managedObjects        ConstructionObject[]   @relation("ObjectProjectManager")
+  responsibleWorks      ObjectWork[]           @relation("WorkResponsible")
+  requestedInspections  ConstructionInspection[] @relation("InspectionRequestedBy")
+  performedInspections  ConstructionInspection[] @relation("InspectionInspector")
+  responsibleIssues     InspectionIssue[]      @relation("IssueResponsible")
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+
+  @@unique([tenantId, bitrixUserId])
+  @@index([tenantId])
+  @@index([tenantId, role])
+}
+
+enum Role {
+  GENERAL_DIRECTOR
+  TECHNICAL_DIRECTOR
+  PROJECT_MANAGER
+  CONSTRUCTION_CONTROL
+  PTO
+  SDO
+  DEPARTMENT_HEAD
+  ADMIN
+  CONTRACTOR_VIEWER
+}
+
+// ============================== RISK SETTINGS =================================
+
+/// Настраиваемые пороги светофора/эскалации (ТЗ п.19, 32, 39) — не хардкодятся.
+model RiskSettings {
+  id                               String   @id @default(uuid())
+  tenantId                         String   @unique
+  tenant                           Tenant   @relation(fields: [tenantId], references: [id])
+  greenVarianceThreshold           Decimal  @default(-5) @db.Decimal(6, 2)
+  yellowVarianceThreshold          Decimal  @default(-15) @db.Decimal(6, 2)
+  escalateToTechDirectorAfterDays  Int      @default(7)
+  escalateToGeneralDirectorAfterDays Int    @default(14)
+  staleProgressAfterDays           Int      @default(10)
+  updatedAt                        DateTime @updatedAt
+}
+
+// ============================ CONSTRUCTION OBJECT ==============================
+
+model ConstructionObject {
+  id                 String   @id @default(uuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id])
+  externalCode       String? // УКО / код из Excel-источника
+  name               String
+  address            String
+  customerName       String?
+  organizationName   String? // ГПО -> "ООО СЗ «Гор-Строй»", СПО -> из исходной таблицы
+  projectManagerId   String?
+  projectManager     User?    @relation("ObjectProjectManager", fields: [projectManagerId], references: [id])
+  startDate          DateTime?
+  plannedFinishDate  DateTime?
+  actualFinishDate   DateTime?
+  contractValue      Decimal? @db.Decimal(16, 2)
+  status             ObjectStatus @default(PLANNED)
+  healthStatus       HealthStatus @default(GRAY)
+  healthReasons      Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  version            Int      @default(1)
+
+  contractors        ObjectContractor[]
+  works              ObjectWork[]
+  inspections        ConstructionInspection[]
+  executiveDocuments ExecutiveDocument[]
+  executiveDocumentPackages ExecutiveDocumentPackage[]
+  materialBatches    MaterialBatch[]
+  sdoCases           SdoCase[]
+  financialClosings  FinancialClosing[]
+  attachments        Attachment[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, healthStatus])
+  @@index([projectManagerId])
+  @@index([plannedFinishDate])
+}
+
+enum ObjectStatus {
+  PLANNED
+  ACTIVE
+  AT_RISK
+  DELAYED
+  SUSPENDED
+  COMPLETED
+  ARCHIVED
+}
+
+enum HealthStatus {
+  GREEN
+  YELLOW
+  RED
+  GRAY
+}
+
+// ================================ CONTRACTORS ==================================
+
+model Contractor {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  name        String
+  inn         String?
+  contactData Json?
+  status      ContractorStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  objects ObjectContractor[]
+  works   ObjectWork[]
+
+  @@index([tenantId])
+  @@unique([tenantId, inn])
+}
+
+enum ContractorStatus {
+  ACTIVE
+  SUSPENDED
+  BLOCKLISTED
+}
+
+model ObjectContractor {
+  id           String   @id @default(uuid())
+  objectId     String
+  object       ConstructionObject @relation(fields: [objectId], references: [id])
+  contractorId String
+  contractor   Contractor @relation(fields: [contractorId], references: [id])
+  role         String? // генподрядчик / субподрядчик / поставщик
+  createdAt    DateTime @default(now())
+
+  @@unique([objectId, contractorId])
+  @@index([contractorId])
+}
+
+// ============================== WORK DICTIONARY =================================
+
+model WorkCategory {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  parentId  String?
+  parent    WorkCategory? @relation("CategoryTree", fields: [parentId], references: [id])
+  children  WorkCategory[] @relation("CategoryTree")
+  name      String
+  code      String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+
+  workTypes WorkType[]
+
+  @@index([tenantId])
+  @@index([parentId])
+}
+
+model WorkType {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id])
+  categoryId            String
+  category              WorkCategory @relation(fields: [categoryId], references: [id])
+  name                  String
+  unit                  String
+  requiresInspection    Boolean  @default(true)
+  requiresExecutiveDocs Boolean  @default(true)
+  requiresMaterials     Boolean  @default(false)
+  isActive              Boolean  @default(true)
+
+  objectWorks ObjectWork[]
+
+  @@index([tenantId])
+  @@index([categoryId])
+}
+
+// ================================ OBJECT WORK ===================================
+
+model ObjectWork {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  objectId            String
+  object              ConstructionObject @relation(fields: [objectId], references: [id])
+  workTypeId          String
+  workType            WorkType @relation(fields: [workTypeId], references: [id])
+  contractorId        String?
+  contractor          Contractor? @relation(fields: [contractorId], references: [id])
+  responsibleUserId   String?
+  responsibleUser     User?    @relation("WorkResponsible", fields: [responsibleUserId], references: [id])
+  name                String
+  unit                String
+  plannedQuantity     Decimal  @db.Decimal(14, 3)
+  actualQuantity      Decimal  @default(0) @db.Decimal(14, 3)
+  planType            PlanType @default(FINAL) // ТЗ п.50: intermediate/final вместо "серый/синий план"
+  plannedStartDate    DateTime
+  plannedFinishDate   DateTime
+  actualStartDate     DateTime?
+  actualFinishDate    DateTime?
+  estimatedCost       Decimal? @db.Decimal(16, 2)
+  status              WorkStatus @default(PLANNED)
+  progressPercent     Decimal  @default(0) @db.Decimal(5, 2)
+  scheduleStatus      ScheduleStatus @default(ON_TRACK)
+  varianceP           Decimal  @default(0) @db.Decimal(6, 2)
+  delayDays           Int      @default(0)
+  // Воронка "потенциал к закрытию" (PotentialClosingService, ТЗ §31):
+  // объём, прошедший каждый этап — приёмка СК / готовая ИД / передано в СДО.
+  // НЕ дублирует actualQuantity — это подмножества, растущие по мере
+  // прохождения этапов (accepted <= actual, docsReady <= accepted, ...).
+  acceptedQuantity              Decimal @default(0) @db.Decimal(14, 3)
+  executiveDocsReadyQuantity    Decimal @default(0) @db.Decimal(14, 3)
+  transferredToSdoQuantity      Decimal @default(0) @db.Decimal(14, 3)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  version             Int      @default(1)
+
+  progressHistory        WorkProgress[]
+  predecessorDependencies WorkDependency[] @relation("SuccessorWork")
+  successorDependencies   WorkDependency[] @relation("PredecessorWork")
+  inspections             ConstructionInspection[]
+  executiveDocuments      ExecutiveDocument[]
+  workMaterials           WorkMaterial[]
+  sdoCases                SdoCase[]
+
+  @@index([tenantId])
+  @@index([objectId])
+  @@index([contractorId])
+  @@index([responsibleUserId])
+  @@index([status])
+  @@index([plannedFinishDate])
+}
+
+enum PlanType {
+  INTERMEDIATE
+  FINAL
+}
+
+enum WorkStatus {
+  PLANNED
+  BLOCKED
+  IN_PROGRESS
+  DONE
+}
+
+enum ScheduleStatus {
+  ON_TRACK
+  BEHIND
+  CRITICAL
+  DONE
+}
+
+model WorkDependency {
+  id                   String   @id @default(uuid())
+  predecessorWorkId    String
+  predecessorWork      ObjectWork @relation("PredecessorWork", fields: [predecessorWorkId], references: [id])
+  successorWorkId      String
+  successorWork        ObjectWork @relation("SuccessorWork", fields: [successorWorkId], references: [id])
+  dependencyType       DependencyType @default(FINISH_TO_START)
+  requiresAcceptance   Boolean  @default(true)
+
+  @@unique([predecessorWorkId, successorWorkId])
+  @@index([successorWorkId])
+}
+
+enum DependencyType {
+  FINISH_TO_START
+}
+
+model WorkProgress {
+  id               String   @id @default(uuid())
+  tenantId         String
+  objectWorkId     String
+  objectWork       ObjectWork @relation(fields: [objectWorkId], references: [id])
+  quantityDelta    Decimal  @db.Decimal(14, 3)
+  totalQuantity    Decimal  @db.Decimal(14, 3)
+  progressPercent  Decimal  @db.Decimal(5, 2)
+  reportedAt       DateTime @default(now())
+  reportedBy       String
+  comment          String?
+  createdAt        DateTime @default(now())
+
+  @@index([objectWorkId])
+  @@index([reportedAt])
+}
+
+// ============================ CONSTRUCTION CONTROL ==============================
+
+model ConstructionInspection {
+  id             String   @id @default(uuid())
+  tenantId       String
+  objectId       String
+  object         ConstructionObject @relation(fields: [objectId], references: [id])
+  objectWorkId   String
+  objectWork     ObjectWork @relation(fields: [objectWorkId], references: [id])
+  requestedById  String?
+  requestedBy    User?    @relation("InspectionRequestedBy", fields: [requestedById], references: [id])
+  requestedAt    DateTime @default(now())
+  inspectorId    String?
+  inspector      User?    @relation("InspectionInspector", fields: [inspectorId], references: [id])
+  status         InspectionStatus @default(WAITING)
+  inspectionDate DateTime?
+  decision       String?
+  comment        String?
+  acceptedAt     DateTime?
+  acceptedQuantity Decimal? @db.Decimal(14, 3)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  issues InspectionIssue[]
+  photos InspectionPhoto[]
+
+  @@index([tenantId])
+  @@index([objectId])
+  @@index([objectWorkId])
+  @@index([status])
+}
+
+enum InspectionStatus {
+  NOT_SUBMITTED
+  WAITING
+  IN_REVIEW
+  ISSUES_FOUND
+  REINSPECTION
+  ACCEPTED
+  REJECTED
+  BLOCKED
+}
+
+model InspectionIssue {
+  id                String   @id @default(uuid())
+  tenantId          String
+  inspectionId      String
+  inspection        ConstructionInspection @relation(fields: [inspectionId], references: [id])
+  title             String
+  description       String
+  severity          IssueSeverity @default(MINOR)
+  responsibleUserId String?
+  responsibleUser   User?    @relation("IssueResponsible", fields: [responsibleUserId], references: [id])
+  dueDate           DateTime?
+  status            IssueStatus @default(OPEN)
+  resolvedAt        DateTime?
+  resolvedBy        String?
+  verifiedAt        DateTime?
+  verifiedBy        String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  photos InspectionPhoto[]
+
+  @@index([tenantId])
+  @@index([inspectionId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+enum IssueSeverity {
+  MINOR
+  CRITICAL
+}
+
+enum IssueStatus {
+  OPEN
+  IN_PROGRESS
+  READY_FOR_VERIFICATION
+  CLOSED
+  REJECTED
+}
+
+model InspectionPhoto {
+  id             String   @id @default(uuid())
+  tenantId       String
+  inspectionId   String
+  inspection     ConstructionInspection @relation(fields: [inspectionId], references: [id])
+  issueId        String?
+  issue          InspectionIssue? @relation(fields: [issueId], references: [id])
+  fileProvider   FileProvider @default(LOCAL)
+  externalFileId String
+  fileName       String
+  uploadedBy     String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  @@index([inspectionId])
+  @@index([issueId])
+}
+
+enum FileProvider {
+  LOCAL
+  BITRIX_DISK
+}
+
+// =================================== MATERIALS ====================================
+
+model Material {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  name         String
+  manufacturer String?
+  brand        String?
+  type         String?
+
+  batches MaterialBatch[]
+
+  @@index([tenantId])
+}
+
+model MaterialBatch {
+  id            String   @id @default(uuid())
+  tenantId      String
+  materialId    String
+  material      Material @relation(fields: [materialId], references: [id])
+  batchNumber   String
+  supplier      String?
+  deliveryDate  DateTime?
+  objectId      String?
+  object        ConstructionObject? @relation(fields: [objectId], references: [id])
+
+  documents MaterialDocument[]
+  workLinks WorkMaterial[]
+
+  @@index([tenantId])
+  @@index([materialId])
+  @@index([objectId])
+}
+
+model MaterialDocument {
+  id              String   @id @default(uuid())
+  tenantId        String
+  materialBatchId String
+  materialBatch   MaterialBatch @relation(fields: [materialBatchId], references: [id])
+  type            MaterialDocumentType
+  number          String?
+  validFrom       DateTime?
+  validUntil      DateTime?
+  fileId          String?
+
+  @@index([materialBatchId])
+}
+
+enum MaterialDocumentType {
+  CERTIFICATE
+  PASSPORT
+  DECLARATION
+  QUALITY_DOCUMENT
+  OTHER
+}
+
+model WorkMaterial {
+  id              String   @id @default(uuid())
+  objectWorkId    String
+  objectWork      ObjectWork @relation(fields: [objectWorkId], references: [id])
+  materialBatchId String
+  materialBatch   MaterialBatch @relation(fields: [materialBatchId], references: [id])
+  quantity        Decimal  @db.Decimal(14, 3)
+
+  @@unique([objectWorkId, materialBatchId])
+  @@index([materialBatchId])
+}
+
+// ============================= EXECUTIVE DOCUMENTATION (ПТО) =========================
+
+model ExecutiveDocument {
+  id             String   @id @default(uuid())
+  tenantId       String
+  objectId       String
+  object         ConstructionObject @relation(fields: [objectId], references: [id])
+  objectWorkId   String
+  objectWork     ObjectWork @relation(fields: [objectWorkId], references: [id])
+  type           ExecutiveDocumentType
+  number         String?
+  documentDate   DateTime?
+  status         ExecutiveDocumentStatus @default(NOT_STARTED)
+  fileId         String?
+  createdBy      String?
+  approvedBy     String?
+  approvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  packages ExecutiveDocumentPackageItem[]
+
+  @@index([tenantId])
+  @@index([objectId])
+  @@index([objectWorkId])
+  @@index([status])
+}
+
+enum ExecutiveDocumentType {
+  AOSR
+  EXECUTIVE_SCHEME
+  CERTIFICATE
+  PASSPORT
+  LAB_REPORT
+  OTHER
+}
+
+enum ExecutiveDocumentStatus {
+  NOT_STARTED
+  DRAFT
+  IN_PROGRESS
+  WAITING_DOCUMENT
+  WAITING_CERTIFICATE
+  WAITING_APPROVAL
+  READY
+  APPROVED
+}
+
+model ExecutiveDocumentPackage {
+  id          String   @id @default(uuid())
+  tenantId    String
+  objectId    String
+  object      ConstructionObject @relation(fields: [objectId], references: [id])
+  objectWorkId String?
+  status      PackageStatus @default(DRAFT)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  documents ExecutiveDocumentPackageItem[]
+  ptoTransfer PtoTransfer?
+  // ХАРДЕНИНГ-ФИКС (integrity pass): раньше было `sdoCase SdoCase?`
+  // (одна запись на пакет) при том, что PtoService.transferToSdo() создаёт
+  // отдельный SdoCase на каждый objectWorkId, встречающийся в документах
+  // пакета — пакет с работами по ДВУМ разным objectWork падал бы на
+  // UNIQUE constraint при создании второго SdoCase. Модель уже
+  // предполагала SdoCase на уровне ObjectWork — теперь связь честно
+  // one-to-many, см. SdoCase.executiveDocumentPackageId ниже.
+  sdoCases    SdoCase[]
+
+  @@index([tenantId])
+  @@index([objectId])
+  @@index([status])
+}
+
+enum PackageStatus {
+  DRAFT
+  IN_PROGRESS
+  READY
+  TRANSFERRED_TO_SDO
+  RETURNED
+}
+
+model ExecutiveDocumentPackageItem {
+  id           String   @id @default(uuid())
+  packageId    String
+  package      ExecutiveDocumentPackage @relation(fields: [packageId], references: [id])
+  documentId   String
+  document     ExecutiveDocument @relation(fields: [documentId], references: [id])
+
+  @@unique([packageId, documentId])
+}
+
+model PtoTransfer {
+  id          String   @id @default(uuid())
+  tenantId    String
+  packageId   String   @unique
+  package     ExecutiveDocumentPackage @relation(fields: [packageId], references: [id])
+  transferredBy String
+  transferredAt DateTime @default(now())
+  comment     String?
+
+  @@index([tenantId])
+}
+
+// ==================================== СДО ============================================
+
+model SdoCase {
+  id                         String   @id @default(uuid())
+  tenantId                   String
+  objectId                   String
+  object                     ConstructionObject @relation(fields: [objectId], references: [id])
+  objectWorkId               String
+  objectWork                 ObjectWork @relation(fields: [objectWorkId], references: [id])
+  // ХАРДЕНИНГ-ФИКС (integrity pass): @unique убран — один пакет ИД может
+  // покрывать несколько работ и, соответственно, порождать несколько
+  // SdoCase (по одному на objectWorkId). Дубль на конкретную пару
+  // пакет+работа предотвращается составным @@unique ниже, а не одиночным
+  // ограничением на весь пакет.
+  executiveDocumentPackageId String?
+  executiveDocumentPackage   ExecutiveDocumentPackage? @relation(fields: [executiveDocumentPackageId], references: [id])
+  status                     SdoStatus @default(NOT_TRANSFERRED)
+  ptoTransferredAt           DateTime?
+  ptoTransferredBy           String?
+  sdoResponsibleId           String?
+  estimatedValue             Decimal? @db.Decimal(16, 2)
+  calculatedValue            Decimal? @db.Decimal(16, 2)
+  acceptedClosingValue       Decimal? @db.Decimal(16, 2)
+  calculatedAt               DateTime?
+  closedAt                   DateTime?
+  comment                    String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  financialClosings FinancialClosing[]
+
+  @@index([tenantId])
+  @@index([objectId])
+  @@index([objectWorkId])
+  @@index([status])
+  @@unique([executiveDocumentPackageId, objectWorkId])
+}
+
+enum SdoStatus {
+  NOT_TRANSFERRED
+  READY_FOR_TRANSFER
+  TRANSFERRED
+  IN_PROGRESS
+  NEEDS_CLARIFICATION
+  CALCULATED
+  READY_TO_CLOSE
+  CLOSED
+}
+
+// ============================= FINANCIAL CLOSING =====================================
+
+model FinancialClosing {
+  id         String   @id @default(uuid())
+  tenantId   String
+  objectId   String
+  object     ConstructionObject @relation(fields: [objectId], references: [id])
+  sdoCaseId  String
+  sdoCase    SdoCase  @relation(fields: [sdoCaseId], references: [id])
+  period     String // "2026-09"
+  amount     Decimal  @db.Decimal(16, 2)
+  closingDate DateTime @default(now())
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([objectId])
+  @@index([sdoCaseId])
+  @@index([closingDate])
+}
+
+// =================================== SHARED =========================================
+
+model Attachment {
+  id             String   @id @default(uuid())
+  tenantId       String
+  objectId       String?
+  object         ConstructionObject? @relation(fields: [objectId], references: [id])
+  entityType     String
+  entityId       String
+  fileProvider   FileProvider @default(LOCAL)
+  externalFileId String
+  fileName       String
+  uploadedBy     String
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([entityType, entityId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  entityType String
+  entityId   String
+  action     String
+  oldValue   Json?
+  newValue   Json?
+  createdAt  DateTime @default(now())
+  ip         String?
+
+  @@index([tenantId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  type       String
+  title      String
+  body       String?
+  dedupKey   String
+  entityType String?
+  entityId   String?
+  readAt     DateTime?
+  sentToBitrix Boolean @default(false)
+  createdAt  DateTime @default(now())
+
+  @@unique([tenantId, dedupKey])
+  @@index([tenantId, userId])
+  @@index([createdAt])
+}
+
+model DictionaryItem {
+  id       String  @id @default(uuid())
+  tenantId String
+  tenant   Tenant  @relation(fields: [tenantId], references: [id])
+  category String // напр. "ISSUE_SEVERITY", "MATERIAL_TYPE"
+  code     String
+  label    String
+  sortOrder Int    @default(0)
+  isActive Boolean @default(true)
+
+  @@unique([tenantId, category, code])
+  @@index([tenantId, category])
+}

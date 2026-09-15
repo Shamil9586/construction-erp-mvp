@@ -1,0 +1,19 @@
+# Оверрайд для чисто локального запуска без домена и TLS (ТЗ: development).
+# Отключает Caddy, публикует frontend напрямую на 8080/HTTP.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# Bitrix24 требует HTTPS для встраивания в iframe — этот режим годится
+# только для прямой разработки/просмотра экранов вне портала.
+
+services:
+  reverse-proxy:
+    profiles: ["disabled"]
+
+  frontend:
+    ports:
+      - "8080:80"
+
+  backend:
+    ports:
+      - "3000:3000"

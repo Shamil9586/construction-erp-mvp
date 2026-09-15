@@ -1,0 +1,101 @@
+# Тестовое развёртывание Construction ERP (ТЗ §59): PostgreSQL + backend +
+# frontend(nginx) + Caddy(HTTPS-реверс-прокси). Секреты берутся из .env
+# (не коммитится — см. .env.example и .gitignore).
+#
+# Запуск: cp .env.example .env && отредактировать .env, затем:
+#   docker compose up -d --build
+#
+# Локально без публичного домена/TLS:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# ПРИМЕЧАНИЕ: сборка образов не выполнялась в песочнице разработки (нет
+# доступа к npm registry/Docker Hub) — см. README «Известные ограничения
+# среды». Файл написан по стандартным паттернам и готов к использованию в
+# среде с доступом в интернет — REQUIRES CI/CD VERIFICATION.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # ВАЖНО: это тестовое/демо-развёртывание (ТЗ: "для разработки
+      # использовать test/mock среду"), поэтому NODE_ENV намеренно НЕ
+      # "production" — иначе AUTH_MODE=demo (спуфабельная demo-идентификация
+      # поверх сид-данных) будет отклонён на старте (fail closed, см.
+      # apps/backend/src/modules/auth/bitrix-auth.guard.ts). Реальный
+      # production-деплой (после верификации на тестовом портале Bitrix24)
+      # должен использовать NODE_ENV=production + AUTH_MODE=bitrix +
+      # SESSION_SECRET — см. docs/bitrix24-integration.md §«Auth boundary».
+      NODE_ENV: test
+      PORT: 3000
+      AUTH_MODE: ${AUTH_MODE:-demo}
+      SESSION_SECRET: ${SESSION_SECRET}
+      DATABASE_URL: ${DATABASE_URL}
+      ALLOWED_BITRIX_DOMAIN: ${ALLOWED_BITRIX_DOMAIN}
+      BITRIX_CLIENT_ID: ${BITRIX_CLIENT_ID}
+      BITRIX_CLIENT_SECRET: ${BITRIX_CLIENT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      # Fail-closed по умолчанию (пустая переменная !== "true") — см.
+      # src/bitrix/install.controller.ts и .env.example. Ставить "true"
+      # только после проверки на тестовом портале Bitrix24.
+      BITRIX_INSTALL_ENABLED: ${BITRIX_INSTALL_ENABLED:-false}
+      # Демо/локальное файловое хранилище (MockFileStorageProvider,
+      # integrity-fix pass) — реально сохраняет байты на диск в контейнере,
+      # но это НЕ production storage. Реальная загрузка в Bitrix24.Disk
+      # остаётся отдельным непроверенным этапом (RealFileStorageProvider).
+      LOCAL_FILE_STORAGE_PATH: ${LOCAL_FILE_STORAGE_PATH:-/app/storage/local-uploads}
+    volumes:
+      - local_uploads:/app/storage/local-uploads
+    expose:
+      - "3000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    expose:
+      - "80"
+
+  reverse-proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+    environment:
+      ERP_DOMAIN: ${ERP_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+  local_uploads:

@@ -1,0 +1,9 @@
+# HTTPS-терминация для тестового окружения (ТЗ §59).
+# Caddy автоматически выпускает и обновляет TLS-сертификат (Let's Encrypt)
+# для домена, указанного в ERP_DOMAIN — подходит для test/staging с реальным
+# DNS-именем. Для чисто локального запуска без публичного домена используйте
+# `docker compose -f docker-compose.yml -f docker-compose.local.yml up`,
+# который публикует frontend напрямую по HTTP (см. docker-compose.local.yml).
+{$ERP_DOMAIN} {
+    reverse_proxy frontend:80
+}
