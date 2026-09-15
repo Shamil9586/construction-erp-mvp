@@ -159,7 +159,7 @@ export function ExecutiveDashboard() {
           rowKey={(r) => `${r.entityType}:${r.entityId}`}
           dataSource={attention}
           pagination={{ pageSize: 10 }}
-          rowClassName={(r) => (r.severity === "CRITICAL" ? "attention-row-critical" : r.severity === "HIGH" ? "attention-row-high" : "")}
+          rowClassName={(r) => (r.severity === "RED" ? "attention-row-critical" : r.severity === "YELLOW" ? "attention-row-high" : "")}
           columns={[
             {
               title: "Важность",

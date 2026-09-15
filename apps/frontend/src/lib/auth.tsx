@@ -82,7 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // В bitrix-режиме заголовки не помогут (backend их игнорирует) — нужен
   // подписанный токен из ещё не подключённого placement-потока, поэтому
   // headers сознательно пустые, а не подделка.
-  const headers = useMemo(
+  const headers = useMemo<Record<string, string>>(
     () => (authMode === "demo" ? { "X-Tenant-Id": tenantId, "X-Bitrix-User-Id": String(identity.bitrixUserId) } : {}),
     [authMode, tenantId, identity],
   );
