@@ -1,19 +1,17 @@
 # Права доступа (RBAC)
 
-Источник истины: `packages/domain/src/rbac.ts` (проверено юнит-тестами в
-`packages/domain/test/rbac.test.ts`). Backend — единственное место, где
+Источник истины: `packages/domain/src/rbac.ts`. Backend — единственное место, где
 разрешения реально проверяются (`PermissionsGuard` +
-`@RequirePermissions(...)` на каждом контроллере, см. §«Как это подключено»
-ниже). Frontend может скрывать кнопки на основе той же таблицы, но это
-исключительно UX — не механизм защиты.
+`@RequirePermissions(...)` на контроллерах). Frontend может скрывать кнопки на
+основе той же таблицы, но это исключительно UX — не механизм защиты.
 
 ## Роли (9, ТЗ §12)
 
 | Роль | Назначение |
 |---|---|
 | `GENERAL_DIRECTOR` | Генеральный директор — только просмотр, Executive Dashboard |
-| `TECHNICAL_DIRECTOR` | Технический директор — просмотр + верификация замечаний, эскалации |
-| `PROJECT_MANAGER` (РП) | Ведёт объект: создаёт объекты/работы, вносит факт, предъявляет на СК |
+| `TECHNICAL_DIRECTOR` | Технический директор — просмотр, редактирование объекта, управление назначениями подрядчиков, верификация замечаний |
+| `PROJECT_MANAGER` (РП) | Ведёт объект: создаёт объекты/работы, назначает субподрядчиков, вносит факт, предъявляет на СК |
 | `CONSTRUCTION_CONTROL` (СК) | Строительный контроль: принимает/отклоняет работы, создаёт замечания |
 | `PTO` | Формирует и подтверждает исполнительную документацию, передаёт пакеты в СДО |
 | `SDO` | Вносит расчётную стоимость, закрывает финансово |
@@ -28,6 +26,7 @@
 | OBJECT_VIEW | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | OBJECT_CREATE | | | ✅ | | | | | ✅ | |
 | OBJECT_EDIT | | ✅ | | | | | | ✅ | |
+| OBJECT_MANAGE_CONTRACTORS | | ✅ | ✅ | | | | | ✅ | |
 | WORK_VIEW | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | WORK_CREATE | | | ✅ | | | | | ✅ | |
 | WORK_UPDATE_PROGRESS | | | ✅ | | | | | ✅ | |
@@ -46,9 +45,15 @@
 
 Полный список — `Permission` enum в `packages/domain/src/types.ts`.
 
+`OBJECT_MANAGE_CONTRACTORS` намеренно отделён от `OBJECT_EDIT`: РП может
+назначать/снимать субподрядчиков объекта, но это не даёт ему право менять
+карточку объекта, сроки, статус или назначенного РП. Это поведение проверено
+реальным HTTP E2E (`Jest + Supertest`) в Railway TEST 2026-09-16.
+
 ## Как это подключено на backend
 
-Каждый контроллер (`apps/backend/src/modules/*/*.module.ts`) навешивает:
+Каждый защищённый контроллер навешивает `BitrixAuthGuard`,
+`PermissionsGuard` и конкретный `@RequirePermissions(...)`.
 
 ```ts
 @UseGuards(BitrixAuthGuard, PermissionsGuard)
@@ -60,12 +65,12 @@ export class ObjectsController {
 }
 ```
 
-- `BitrixAuthGuard` определяет пользователя (в MVP — по заголовкам
-  `X-Tenant-Id`/`X-Bitrix-User-Id`, см. `docs/bitrix24-integration.md` о
-  переходе на верификацию через placement-контекст).
-- `PermissionsGuard` вызывает `hasPermission(user.role, requiredPermission)`
-  — тот же самый `packages/domain/src/rbac.ts`, что проверен в
-  `packages/domain/test/rbac.test.ts` (12 тестов, PASS).
+- `BitrixAuthGuard` определяет пользователя. В текущем TEST-стенде используется
+  `AUTH_MODE=demo` с `X-Tenant-Id`/`X-Bitrix-User-Id`; переход на реальный
+  Bitrix24-контекст выполняется только на отдельном тестовом портале.
+- `PermissionsGuard` вызывает `hasPermission(user.role, requiredPermission)`.
+- 2026-09-16 дополнительно проверены positive/negative RBAC через публичный
+  Render → Railway API и полный сквозной HTTP E2E: 40/40 тестов PASS.
 
 ## Идентификация пользователя
 
