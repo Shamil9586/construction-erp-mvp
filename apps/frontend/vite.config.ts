@@ -23,6 +23,7 @@ export default defineConfig({
     },
   },
   preview: {
+    allowedHosts: ["construction-erp-mvp-frontend-test.onrender.com"],
     proxy: {
       "/api": { target: apiTarget, changeOrigin: true },
     },
