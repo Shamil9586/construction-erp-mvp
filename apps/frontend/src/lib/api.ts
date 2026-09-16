@@ -3,6 +3,14 @@
  * Ошибки backend (ValidationPipe/ForbiddenException/...) пробрасываются как
  * ApiError с сохранением статуса и тела ответа для UI (React Hook Form / antd).
  */
+declare const __API_BASE_URL__: string;
+
+export function apiUrl(path: string): string {
+  const base = __API_BASE_URL__.replace(/\/+$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalizedPath}`;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, public body: any) {
     super(typeof body?.message === "string" ? body.message : `HTTP ${status}`);
@@ -10,7 +18,7 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, headers: Record<string, string>, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(apiUrl(`/api${path}`), {
     ...init,
     headers: { "Content-Type": "application/json", ...headers, ...(init?.headers ?? {}) },
   });

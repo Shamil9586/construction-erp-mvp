@@ -2,6 +2,7 @@ import { Global, Module, Controller, Get } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { BitrixAuthGuard } from "./bitrix-auth.guard";
 import { PermissionsGuard } from "../../common/guards/permissions.guard";
+import { PrismaService } from "../../common/prisma.service";
 
 /**
  * AuthModule — единственное место, где регистрируются BitrixAuthGuard и
@@ -29,6 +30,8 @@ import { PermissionsGuard } from "../../common/guards/permissions.guard";
 @ApiTags("auth")
 @Controller("auth")
 class AuthStatusController {
+  constructor(private readonly prisma: PrismaService) {}
+
   /**
    * GET /auth/mode — единственный публичный (без guard'ов) эндпоинт этого
    * модуля. Frontend обязан спрашивать backend, а не решать сам, показывать
@@ -38,9 +41,15 @@ class AuthStatusController {
    * ложное ощущение защищённости). См. apps/frontend/src/lib/auth.tsx.
    */
   @Get("mode")
-  getMode() {
+  async getMode() {
     const mode = (process.env.AUTH_MODE ?? "demo").toLowerCase();
-    return { mode: mode === "bitrix" ? "bitrix" : "demo" };
+    if (mode === "bitrix") return { mode: "bitrix" as const };
+
+    // Demo-only bootstrap: tenant ID is needed by the intentionally
+    // spoofable X-Tenant-Id/X-Bitrix-User-Id demo auth boundary. Never
+    // expose tenant discovery in real Bitrix auth mode.
+    const tenant = await this.prisma.tenant.findFirst({ select: { id: true } });
+    return { mode: "demo" as const, tenantId: tenant?.id ?? null };
   }
 }
 

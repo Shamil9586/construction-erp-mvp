@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Role } from "@construction-erp/domain";
+import { apiUrl } from "./api";
 
 /**
  * Идентификация пользователя во frontend.
@@ -55,10 +56,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/auth/mode")
+    fetch(apiUrl("/api/auth/mode"))
       .then((r) => r.json())
       .then((data) => {
-        if (!cancelled) setAuthMode(data?.mode === "bitrix" ? "bitrix" : "demo");
+        if (cancelled) return;
+        if (data?.mode === "bitrix") {
+          setAuthMode("bitrix");
+          return;
+        }
+        setAuthMode("demo");
+        if (typeof data?.tenantId === "string" && data.tenantId) {
+          setTenantIdState((current) => {
+            if (current) return current;
+            localStorage.setItem("cerp.tenantId", data.tenantId);
+            return data.tenantId;
+          });
+        }
       })
       .catch(() => {
         // Backend недоступен — не притворяемся, что demo-режим работает.
