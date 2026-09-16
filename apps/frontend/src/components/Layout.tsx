@@ -1,11 +1,10 @@
 import React from "react";
-import { Layout as AntLayout, Menu, Select, Input, Typography, Alert } from "antd";
+import { Alert, Input, Layout as AntLayout, Menu, Select, Typography } from "antd";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth, DEMO_IDENTITIES } from "../lib/auth";
 
 const { Header, Content } = AntLayout;
 
-/** Главное меню (ТЗ п.40). */
 const MENU_ITEMS = [
   { key: "/", label: <Link to="/">Панель</Link> },
   { key: "/objects", label: <Link to="/objects">Объекты</Link> },
@@ -15,7 +14,7 @@ const MENU_ITEMS = [
 
 export function AppLayout() {
   const location = useLocation();
-  const { authMode, tenantId, setTenantId, identity, setIdentity } = useAuth();
+  const { authMode, tenantId, setTenantId, identity, setIdentity, hasBitrixSession } = useAuth();
   const selectedKey = MENU_ITEMS.find((i) => location.pathname === i.key || (i.key !== "/" && location.pathname.startsWith(i.key)))?.key ?? "/";
 
   return (
@@ -43,16 +42,18 @@ export function AppLayout() {
             />
           </>
         )}
-        {authMode === "bitrix" && <Typography.Text type="secondary">Режим Bitrix24 (сессия из placement)</Typography.Text>}
+        {authMode === "bitrix" && (
+          <Typography.Text type="secondary">Bitrix24{hasBitrixSession ? " · сессия активна" : " · нет сессии"}</Typography.Text>
+        )}
       </Header>
       <Content style={{ padding: 24 }}>
-        {authMode === "bitrix" && (
+        {authMode === "bitrix" && !hasBitrixSession && (
           <Alert
-            type="warning"
+            type="error"
             showIcon
             style={{ marginBottom: 16 }}
-            message="Приложение в production-режиме авторизации (AUTH_MODE=bitrix)"
-            description="Demo-переключатель личности отключён — это ожидаемо и является хардненингом безопасности (ТЗ п.9), а не ошибкой. Получение сессии из подтверждённого Bitrix24 placement-контекста ещё не подключено в этой среде разработки (REQUIRES BITRIX24 TEST PORTAL VERIFICATION) — без действительного сессионного токена запросы к API будут отклонены backend'ом."
+            message="Нет подтверждённой сессии Bitrix24"
+            description="Откройте приложение из интерфейса Bitrix24. Backend должен проверить placement-контекст и передать в этот SPA короткоживущий сессионный токен. Demo-заголовки в AUTH_MODE=bitrix намеренно не принимаются."
           />
         )}
         <Outlet />

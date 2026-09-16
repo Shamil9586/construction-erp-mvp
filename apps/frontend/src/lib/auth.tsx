@@ -2,21 +2,21 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import { Role } from "@construction-erp/domain";
 import { apiUrl } from "./api";
 
-/**
- * Идентификация пользователя во frontend.
- *
- * ХАРДЕНИНГ (ТЗ п.9): demo-переключатель личности (ниже) допустим ТОЛЬКО
- * когда backend сам находится в AUTH_MODE=demo — см.
- * apps/backend/src/modules/auth/bitrix-auth.guard.ts. Frontend не решает
- * это самостоятельно: при загрузке он спрашивает backend через
- * `GET /auth/mode` (единственный публичный, без guard'ов, эндпоинт) и
- * ТОЛЬКО если backend ответил `{mode: "demo"}`, показывает переключатель и
- * шлёт заголовки X-Tenant-Id/X-Bitrix-User-Id. Если backend в
- * AUTH_MODE=bitrix, эти заголовки backend вообще не читает (см. guard) —
- * переключатель скрывается, а получение реальной сессии должно приходить
- * из подтверждённого Bitrix24 placement-контекста, чего в этой среде
- * разработки нет — REQUIRES BITRIX24 TEST PORTAL VERIFICATION.
- */
+const BITRIX_SESSION_STORAGE_KEY = "cerp.bitrixSession";
+
+function bootstrapBitrixSession(): string {
+  const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  const params = new URLSearchParams(hash);
+  const incoming = params.get("cerp_session");
+  if (incoming) {
+    sessionStorage.setItem(BITRIX_SESSION_STORAGE_KEY, incoming);
+    params.delete("cerp_session");
+    const cleanHash = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleanHash ? `#${cleanHash}` : ""}`);
+    return incoming;
+  }
+  return sessionStorage.getItem(BITRIX_SESSION_STORAGE_KEY) || "";
+}
 
 export interface DemoIdentity {
   bitrixUserId: number;
@@ -42,12 +42,14 @@ interface AuthContextValue {
   identity: DemoIdentity;
   setIdentity: (identity: DemoIdentity) => void;
   headers: Record<string, string>;
+  hasBitrixSession: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authMode, setAuthMode] = useState<AuthMode>("checking");
+  const [sessionToken] = useState(bootstrapBitrixSession);
   const [tenantId, setTenantIdState] = useState(() => localStorage.getItem("cerp.tenantId") || "");
   const [identity, setIdentityState] = useState<DemoIdentity>(() => {
     const saved = localStorage.getItem("cerp.bitrixUserId");
@@ -57,7 +59,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     fetch(apiUrl("/api/auth/mode"))
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
         if (cancelled) return;
         if (data?.mode === "bitrix") {
@@ -74,7 +79,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       })
       .catch(() => {
-        // Backend недоступен — не притворяемся, что demo-режим работает.
         if (!cancelled) setAuthMode("bitrix");
       });
     return () => {
@@ -91,19 +95,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIdentityState(i);
   };
 
-  // В demo-режиме шлём заголовки, которые доверчиво читает BitrixAuthGuard.
-  // В bitrix-режиме заголовки не помогут (backend их игнорирует) — нужен
-  // подписанный токен из ещё не подключённого placement-потока, поэтому
-  // headers сознательно пустые, а не подделка.
   const headers = useMemo<Record<string, string>>((): Record<string, string> => {
+    if (authMode === "bitrix") {
+      return sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {};
+    }
     if (authMode !== "demo") return {};
     return {
       "X-Tenant-Id": tenantId,
       "X-Bitrix-User-Id": String(identity.bitrixUserId),
     };
-  }, [authMode, tenantId, identity]);
+  }, [authMode, tenantId, identity, sessionToken]);
 
-  const value: AuthContextValue = { authMode, tenantId, setTenantId, identity, setIdentity, headers };
+  const value: AuthContextValue = {
+    authMode,
+    tenantId,
+    setTenantId,
+    identity,
+    setIdentity,
+    headers,
+    hasBitrixSession: authMode === "bitrix" && Boolean(sessionToken),
+  };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

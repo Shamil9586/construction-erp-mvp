@@ -6,33 +6,59 @@ import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { AuditInterceptor } from "./common/interceptors/audit.interceptor";
 
+function configuredWebOrigins(): string[] | true {
+  const explicit = (process.env.ALLOWED_WEB_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (explicit.length > 0) return explicit;
+
+  const frontend = process.env.FRONTEND_URL?.trim();
+  if (frontend) {
+    try {
+      return [new URL(frontend).origin];
+    } catch {
+      // Invalid FRONTEND_URL is handled by the Bitrix launch endpoint. Keep
+      // legacy permissive demo CORS here so the standalone demo still boots.
+    }
+  }
+  return true;
+}
+
 /**
- * Bootstrap. CORS/CSP настроены под встраиваемый (iframe) контекст Bitrix24:
- * frame-ancestors ограничен доменом портала (см. ALLOWED_BITRIX_DOMAIN в .env),
- * cookies — SameSite=None; Secure за HTTPS-реверс-прокси (см. infra/).
+ * Bootstrap. The Bitrix portal is an iframe parent, while the React SPA is a
+ * separate web origin (Render in TEST). They are intentionally configured by
+ * different env variables: ALLOWED_BITRIX_DOMAIN controls frame-ancestors;
+ * ALLOWED_WEB_ORIGINS / FRONTEND_URL control browser CORS to the API.
  */
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { cors: false });
 
-  const allowedOrigin = process.env.ALLOWED_BITRIX_DOMAIN
-    ? `https://${process.env.ALLOWED_BITRIX_DOMAIN}`
-    : true;
-
+  const webOrigins = configuredWebOrigins();
   app.enableCors({
-    origin: allowedOrigin,
+    origin:
+      webOrigins === true
+        ? true
+        : (origin, callback) => {
+            if (!origin || webOrigins.includes(origin)) return callback(null, true);
+            return callback(new Error("CORS origin is not allowed"), false);
+          },
     credentials: true,
   });
+
+  const bitrixDomain = process.env.ALLOWED_BITRIX_DOMAIN?.trim();
+  const frameAncestors = bitrixDomain ? ["'self'", `https://${bitrixDomain}`] : ["'self'"];
 
   app.use(
     helmet({
       contentSecurityPolicy: {
         directives: {
           ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-          "frame-ancestors": process.env.ALLOWED_BITRIX_DOMAIN
-            ? [`https://${process.env.ALLOWED_BITRIX_DOMAIN}`]
-            : ["'self'"],
+          "script-src": ["'self'", "https://api.bitrix24.com"],
+          "frame-ancestors": frameAncestors,
         },
       },
+      xFrameOptions: false,
       crossOriginEmbedderPolicy: false,
     }),
   );

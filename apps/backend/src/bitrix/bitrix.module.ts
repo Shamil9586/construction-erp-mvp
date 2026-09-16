@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { PrismaService } from "../common/prisma.service";
 import { BitrixInstallController } from "./install.controller";
+import { BitrixUiController } from "./launch.controller";
 import { BitrixTokenService } from "./bitrix-token.service";
 import { BitrixGatewayService } from "./bitrix-gateway.service";
 import {
@@ -19,7 +20,7 @@ import {
 } from "./adapters/real-bitrix.adapter";
 
 @Module({
-  controllers: [BitrixInstallController],
+  controllers: [BitrixInstallController, BitrixUiController],
   providers: [
     BitrixTokenService,
     BitrixGatewayService,

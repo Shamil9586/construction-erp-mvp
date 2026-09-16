@@ -1,5 +1,6 @@
-import { Module, Injectable, Controller, Get, Post, UseGuards } from "@nestjs/common";
+import { Body, ConflictException, Controller, Get, Injectable, Module, NotFoundException, Param, Patch, Post, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
+import { IsEnum } from "class-validator";
 import { PrismaService } from "../../common/prisma.service";
 import { BitrixModule } from "../../bitrix/bitrix.module";
 import { BitrixGatewayService } from "../../bitrix/bitrix-gateway.service";
@@ -9,12 +10,11 @@ import { RequirePermissions } from "../../common/decorators/permissions.decorato
 import { CurrentUser, AuthenticatedUser } from "../../common/decorators/current-user.decorator";
 import { Permission, Role } from "@construction-erp/domain";
 
-/**
- * UsersService.syncFromBitrix — BitrixUserProvider.getUsers() (Mock или Real)
- * -> upsert локальных User по bitrixUserId (ТЗ п.11: основной внешний ID,
- * НЕ email). Роль/права остаются управляемыми внутри приложения (ADMIN_USERS),
- * Bitrix24 не диктует RBAC этой системы.
- */
+class UpdateUserRoleDto {
+  @IsEnum(Role)
+  role!: Role;
+}
+
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService, private bitrix: BitrixGatewayService) {}
@@ -41,6 +41,20 @@ export class UsersService {
     }
     return { created, updated, total: bitrixUsers.length };
   }
+
+  async updateRole(tenantId: string, userId: string, role: Role) {
+    const user = await this.prisma.user.findFirst({ where: { id: userId, tenantId } });
+    if (!user) throw new NotFoundException("Пользователь не найден");
+
+    if (user.role === Role.ADMIN && role !== Role.ADMIN && user.isActive) {
+      const activeAdmins = await this.prisma.user.count({ where: { tenantId, role: Role.ADMIN, isActive: true } });
+      if (activeAdmins <= 1) {
+        throw new ConflictException("Нельзя снять роль ADMIN у последнего активного администратора tenant");
+      }
+    }
+
+    return this.prisma.user.update({ where: { id: user.id }, data: { role } });
+  }
 }
 
 @ApiTags("users")
@@ -49,14 +63,6 @@ export class UsersService {
 export class UsersController {
   constructor(private users: UsersService) {}
 
-  // ХАРДЕНИНГ-ФИКС (эта итерация): раньше требовал ADMIN_USERS, из-за чего ни
-  // один реальный пользователь (кроме ADMIN) не мог получить список
-  // сотрудников — а он нужен фронтенду для самых обычных операций: выбрать
-  // РП при создании/редактировании объекта, выбрать ответственного за
-  // замечание СК и т.д. Список пользователей (id/имя/роль) сам по себе не
-  // более чувствителен, чем список объектов — понижено до OBJECT_VIEW
-  // (есть у всех ролей, см. packages/domain/src/rbac.ts). Административные
-  // операции (синхронизация с Bitrix24) остаются за ADMIN_USERS ниже.
   @Get()
   @RequirePermissions(Permission.OBJECT_VIEW)
   findAll(@CurrentUser() user: AuthenticatedUser) {
@@ -67,6 +73,12 @@ export class UsersController {
   @RequirePermissions(Permission.ADMIN_USERS)
   sync(@CurrentUser() user: AuthenticatedUser) {
     return this.users.syncFromBitrix(user.tenantId);
+  }
+
+  @Patch(":id/role")
+  @RequirePermissions(Permission.ADMIN_USERS)
+  updateRole(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string, @Body() dto: UpdateUserRoleDto) {
+    return this.users.updateRole(user.tenantId, id, dto.role);
   }
 }
 
