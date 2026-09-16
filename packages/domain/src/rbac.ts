@@ -21,6 +21,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   [Role.TECHNICAL_DIRECTOR]: [
     P.OBJECT_VIEW,
     P.OBJECT_EDIT,
+    P.OBJECT_MANAGE_CONTRACTORS,
     P.WORK_VIEW,
     P.PTO_VIEW,
     P.SDO_VIEW,
@@ -31,6 +32,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   [Role.PROJECT_MANAGER]: [
     P.OBJECT_VIEW,
     P.OBJECT_CREATE,
+    P.OBJECT_MANAGE_CONTRACTORS,
     P.WORK_VIEW,
     P.WORK_CREATE,
     P.WORK_UPDATE_PROGRESS,
