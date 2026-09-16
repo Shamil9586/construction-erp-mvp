@@ -14,10 +14,16 @@ const TODAY = new Date("2026-09-14T00:00:00Z");
 const addDays = (d: Date, days: number) => new Date(d.getTime() + days * 86_400_000);
 
 async function main() {
-  const tenant = await prisma.tenant.create({
-    data: { portal: "stroygeneral.bitrix24.ru", memberId: "mock-member-1", name: 'ООО «СтройГенерал»' },
+  const tenant = await prisma.tenant.upsert({
+    where: { memberId: "mock-member-1" },
+    update: { portal: "stroygeneral.bitrix24.ru", name: 'ООО «СтройГенерал»' },
+    create: { portal: "stroygeneral.bitrix24.ru", memberId: "mock-member-1", name: 'ООО «СтройГенерал»' },
   });
-  await prisma.riskSettings.create({ data: { tenantId: tenant.id } });
+  await prisma.riskSettings.upsert({
+    where: { tenantId: tenant.id },
+    update: {},
+    create: { tenantId: tenant.id },
+  });
 
   const userDefs = [
     { bitrixUserId: 1, name: "Соколов Игорь Петрович", role: "GENERAL_DIRECTOR" as const, position: "Генеральный директор" },
@@ -36,7 +42,11 @@ async function main() {
   ];
   const users: Record<number, string> = {};
   for (const u of userDefs) {
-    const created = await prisma.user.create({ data: { tenantId: tenant.id, ...u } });
+    const created = await prisma.user.upsert({
+      where: { tenantId_bitrixUserId: { tenantId: tenant.id, bitrixUserId: u.bitrixUserId } },
+      update: { name: u.name, role: u.role, position: u.position, isActive: true },
+      create: { tenantId: tenant.id, ...u },
+    });
     users[u.bitrixUserId] = created.id;
   }
   const pmIds = [10, 11, 12, 13, 14].map((id) => users[id]);
@@ -52,13 +62,29 @@ async function main() {
     { name: 'ООО «ОконныеСистемы»', inn: "7701234508" },
   ];
   const contractors = [];
-  for (const c of contractorDefs) contractors.push(await prisma.contractor.create({ data: { tenantId: tenant.id, ...c } }));
+  for (const c of contractorDefs) {
+    contractors.push(
+      await prisma.contractor.upsert({
+        where: { tenantId_inn: { tenantId: tenant.id, inn: c.inn } },
+        update: { name: c.name, status: "ACTIVE" },
+        create: { tenantId: tenant.id, ...c },
+      }),
+    );
+  }
 
-  const catConstruct = await prisma.workCategory.create({ data: { tenantId: tenant.id, name: "Конструктив", code: "CONSTRUCT", sortOrder: 1 } });
-  const catFundament = await prisma.workCategory.create({ data: { tenantId: tenant.id, parentId: catConstruct.id, name: "Фундаменты", code: "FOUNDATION", sortOrder: 1 } });
-  const catOtdelka = await prisma.workCategory.create({ data: { tenantId: tenant.id, name: "Отделочные работы", code: "FINISH", sortOrder: 2 } });
-  const catInzh = await prisma.workCategory.create({ data: { tenantId: tenant.id, name: "Инженерные сети", code: "MEP", sortOrder: 4 } });
-  const catFasad = await prisma.workCategory.create({ data: { tenantId: tenant.id, name: "Фасады", code: "FACADE", sortOrder: 5 } });
+  async function ensureCategory(args: { name: string; code: string; sortOrder: number; parentId?: string }) {
+    const existing = await prisma.workCategory.findFirst({
+      where: { tenantId: tenant.id, code: args.code },
+    });
+    if (existing) return existing;
+    return prisma.workCategory.create({ data: { tenantId: tenant.id, ...args } });
+  }
+
+  const catConstruct = await ensureCategory({ name: "Конструктив", code: "CONSTRUCT", sortOrder: 1 });
+  const catFundament = await ensureCategory({ parentId: catConstruct.id, name: "Фундаменты", code: "FOUNDATION", sortOrder: 1 });
+  const catOtdelka = await ensureCategory({ name: "Отделочные работы", code: "FINISH", sortOrder: 2 });
+  const catInzh = await ensureCategory({ name: "Инженерные сети", code: "MEP", sortOrder: 4 });
+  const catFasad = await ensureCategory({ name: "Фасады", code: "FACADE", sortOrder: 5 });
 
   const workTypeDefs = [
     { key: "rebar", categoryId: catFundament.id, name: "Армирование фундамента", unit: "т", requiresInspection: true, requiresExecutiveDocs: true, requiresMaterials: true },
@@ -71,8 +97,16 @@ async function main() {
   ];
   const workTypes: Record<string, { id: string; name: string; unit: string }> = {};
   for (const w of workTypeDefs) {
-    const created = await prisma.workType.create({ data: { tenantId: tenant.id, ...w } });
-    workTypes[w.key] = created;
+    const { key, ...workTypeData } = w;
+    const existing = await prisma.workType.findFirst({
+      where: { tenantId: tenant.id, categoryId: w.categoryId, name: w.name },
+    });
+    const created =
+      existing ??
+      (await prisma.workType.create({
+        data: { tenantId: tenant.id, ...workTypeData },
+      }));
+    workTypes[key] = created;
   }
 
   type ObjDef = {
@@ -91,6 +125,19 @@ async function main() {
     { name: 'ЖК «Парковый квартал», корпус 1', code: "ГПО-052", address: "г. Москва, Ставропольская ул., 33", org: 'ООО СЗ «Гор-Строй»', pmIndex: 3, contractorIdx: [0, 2], startOffsetDays: -20, durationDays: 260, contractValue: 198_000_000, scenario: "GRAY" },
     { name: "Торговый центр «Галерея-Запад»", code: "СПО-133", address: "г. Москва, Кутузовский пр-т, 78", org: 'ООО «РКС-НР»', pmIndex: 4, contractorIdx: [3, 1], startOffsetDays: -280, durationDays: 360, contractValue: 410_000_000, scenario: "YELLOW" },
   ];
+
+  const existingObjectCount = await prisma.constructionObject.count({ where: { tenantId: tenant.id } });
+  if (existingObjectCount === objectDefs.length) {
+    // eslint-disable-next-line no-console
+    console.log(`Seed уже применён: найдено ${existingObjectCount} демо-объектов; повторный запуск пропущен.`);
+    return;
+  }
+  if (existingObjectCount !== 0) {
+    throw new Error(
+      `Seed остановлен: найден частичный набор объектов (${existingObjectCount}/${objectDefs.length}). ` +
+        "Очистите/восстановите TEST-данные вручную, чтобы не создавать дубли.",
+    );
+  }
 
   let totalWorks = 0;
   for (const o of objectDefs) {
