@@ -1,0 +1,77 @@
+name: Verify Bitrix TEST auth boundary
+
+on:
+  push:
+    branches:
+      - bitrix-test-auth-boundary-20260916
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: construction_erp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/construction_erp?schema=public
+      ENCRYPTION_KEY: github-actions-test-encryption-key-only
+      AUTH_MODE: demo
+      NODE_ENV: development
+      BITRIX_INSTALL_ENABLED: "false"
+      LOCAL_FILE_STORAGE_PATH: /tmp/construction-erp-e2e-storage
+      VITE_API_URL: https://backend.example.test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build domain
+        run: npm run build --workspace packages/domain
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate --workspace apps/backend
+
+      - name: Apply migrations
+        working-directory: apps/backend
+        run: npx prisma migrate deploy
+
+      - name: Build backend
+        run: npm run build --workspace apps/backend
+
+      - name: Build frontend
+        run: npm run build --workspace apps/frontend
+
+      - name: Prepare local file storage
+        run: mkdir -p "$LOCAL_FILE_STORAGE_PATH"
+
+      - name: Domain unit tests
+        run: npm run test:domain
+
+      - name: Backend E2E tests
+        run: npm run test:e2e --workspace apps/backend -- --runInBand
