@@ -345,13 +345,13 @@ export class ObjectsController {
   }
 
   @Post(":id/contractors")
-  @RequirePermissions(Permission.OBJECT_EDIT)
+  @RequirePermissions(Permission.OBJECT_MANAGE_CONTRACTORS)
   assignContractor(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string, @Body() dto: AssignContractorDto) {
     return this.objects.assignContractor(user.tenantId, user, id, dto);
   }
 
   @Delete(":id/contractors/:contractorId")
-  @RequirePermissions(Permission.OBJECT_EDIT)
+  @RequirePermissions(Permission.OBJECT_MANAGE_CONTRACTORS)
   removeContractor(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string, @Param("contractorId") contractorId: string) {
     return this.objects.removeContractor(user.tenantId, user, id, contractorId);
   }
