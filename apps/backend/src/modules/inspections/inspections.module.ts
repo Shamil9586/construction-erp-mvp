@@ -252,7 +252,7 @@ export class InspectionsService {
     });
     if (!inspection) throw new NotFoundException("Проверка не найдена");
 
-    const openCritical = inspection.issues.filter((i) => i.severity === "CRITICAL" && !["CLOSED", "REJECTED"].includes(i.status));
+    const openCritical = inspection.issues.filter((i) => i.severity === "CRITICAL" && !["CLOSED", "REJECTED", "READY_FOR_VERIFICATION"].includes(i.status));
     if (openCritical.length > 0) {
       throw new BadRequestException("Нельзя принять работу: есть непогашенные критические замечания");
     }
