@@ -45,15 +45,53 @@ export class ContractorsService {
       where: { tenantId, status: { in: ["OPEN", "IN_PROGRESS"] }, dueDate: { lt: new Date() }, inspection: { objectWork: { contractorId: id } } },
     });
 
-    const totalPlanned = works.reduce((s, w) => s + Number(w.plannedQuantity), 0);
-    const totalActual = works.reduce((s, w) => s + Number(w.actualQuantity), 0);
-    const worksByObject = new Map<string, { objectId: string; objectName: string; healthStatus: string; works: number }>();
+    const totalPlanned = works.reduce(
+      (s: number, w: any) => s + Number(w.plannedQuantity),
+      0,
+    );
+
+    const totalActual = works.reduce(
+      (s: number, w: any) => s + Number(w.actualQuantity),
+      0,
+    );
+
+    const worksByObject = new Map<
+      string,
+      { objectId: string; objectName: string; healthStatus: string; works: number }
+    >();
+
     for (const w of works) {
       const key = w.objectId;
-      const entry = worksByObject.get(key) ?? { objectId: w.objectId, objectName: w.object.name, healthStatus: w.object.healthStatus, works: 0 };
+
+      const entry =
+        worksByObject.get(key) ?? {
+          objectId: w.objectId,
+          objectName: w.object.name,
+          healthStatus: w.object.healthStatus,
+          works: 0,
+        };
+
       entry.works++;
+
       worksByObject.set(key, entry);
     }
+
+return {
+  contractor,
+  objects: Array.from(worksByObject.values()),
+  totalWorks: works.length,
++    avgProgressPercent: works.length
++      ? works.reduce(
++          (s: number, w: any) => s + Number(w.progressPercent),
++          0,
++        ) / works.length
++      : 0,
+  openIssues,
+  overdueIssues,
+  physicalReadinessRatio: totalPlanned > 0
+    ? (totalActual / totalPlanned) * 100
+    : 0,
+};
 
     return {
       contractor,
