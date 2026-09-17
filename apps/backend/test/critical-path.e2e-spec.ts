@@ -728,7 +728,7 @@ describe("ИНТЕГРИТИ-ФИКС (integrity pass): SdoCase 1:N, tenant/obje
 
     const sdoCases = await prisma.sdoCase.findMany({ where: { tenantId, executiveDocumentPackageId: packageId } });
     expect(sdoCases.length).toBe(2);
-    expect(new Set(sdoCases.map((c) => c.objectWorkId))).toEqual(new Set([workIdA, workIdB]));
+    expect(new Set(sdoCases.map((c: { objectWorkId: string }) => c.objectWorkId))).toEqual(new Set([workIdA, workIdB]));
 
     const transfers = await prisma.ptoTransfer.findMany({ where: { tenantId, packageId } });
     expect(transfers.length).toBe(1);
