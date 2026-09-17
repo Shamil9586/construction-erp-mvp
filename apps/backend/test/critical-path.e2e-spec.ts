@@ -147,6 +147,7 @@ describe("Критический путь ТЗ §53 (объект -> факт ->
       await prisma.notification.deleteMany({ where: { tenantId } });
       await prisma.financialClosing.deleteMany({ where: { tenantId } });
       await prisma.sdoCase.deleteMany({ where: { tenantId } });
+      await prisma.ptoTransfer.deleteMany({ where: { package: { tenantId } },});
       await prisma.executiveDocumentPackageItem.deleteMany({ where: { package: { tenantId } } });
       await prisma.executiveDocumentPackage.deleteMany({ where: { tenantId } });
       await prisma.executiveDocument.deleteMany({ where: { tenantId } });
